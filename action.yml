@@ -48,16 +48,12 @@ inputs:
     description: The UUID of the Coolify server to deploy to.
     required: false
   coolify_supabase_deploy_token:
-    description: The deploy token for the Supabase service.
+    description: The deploy token for the Supabase deployment service. See
+      https://github.com/pawtograder/supabase-coolify-deployment
     required: true
   coolify_supabase_api_url:
     description:
       The URL of the Supabase deployment service. See
-      https://github.com/pawtograder/supabase-coolify-deployment
-    required: true
-  coolify_supabase_service_role_key:
-    description:
-      The service role key for the Supabase deployment service. See
       https://github.com/pawtograder/supabase-coolify-deployment
     required: true
 
