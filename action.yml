@@ -1,23 +1,77 @@
-name: The name of your action here
-description: Provide a description here
-author: Your name or organization here
+name: Coolify NodeJS and Supabase Deployment
+description:
+  Deploys a mono-repo application with a Nixpacks frontend and Supabase backend
+  to Coolify.
+author: Jonathan Bell
 
-# Add your action's branding here. This will appear on the GitHub Marketplace.
 branding:
   icon: heart
   color: red
 
 # Define your inputs here.
 inputs:
-  milliseconds:
-    description: Your input description here
+  deployment_app_uuid:
+    description: The UUID of the Coolify GitHub app to use for generating deployments
+    required: false
+  base_deployment_url:
+    description: The base URL to deploy the web application to. This is used to generate the deployment URL.
+    required: false
+    default: 'dev.pawtograder.net'
+  ephemeral:
+    description:
+      Whether to deploy the application as ephemeral (will be deleted after 24
+      hours).
+    required: false
+    default: false
+    type: boolean
+  coolify_api_url:
+    description: The URL of the Coolify API.
     required: true
-    default: '1000'
+    default: 'https://api.coolify.io'
+  coolify_api_token:
+    description: The token for the Coolify API.
+    required: true
+  coolify_project_uuid:
+    description: The UUID of the Coolify project to deploy to.
+    required: true
+  coolify_environment_uuid:
+    description: The UUID of the Coolify environment to deploy to.
+    required: true
+    default: 'f0c00s0s8g88ock4swc0w4w8'
+  coolify_environment_name:
+    description: The name of the Coolify environment to deploy to.
+    required: true
+  coolify_server_uuid:
+    description: The UUID of the Coolify server to deploy to.
+    required: false
+  coolify_supabase_deploy_token:
+    description: The deploy token for the Supabase service.
+    required: true
+  coolify_supabase_api_url:
+    description:
+      The URL of the Supabase deployment service. See
+      https://github.com/pawtograder/supabase-coolify-deployment
+    required: true
+  coolify_supabase_service_role_key:
+    description:
+      The service role key for the Supabase deployment service. See
+      https://github.com/pawtograder/supabase-coolify-deployment
+    required: true
 
 # Define your outputs here.
 outputs:
-  time:
-    description: Your output description here
+  supabase_url:
+    description: The URL of the newly deployed Supabase service.
+  supabase_service_role_key:
+    description: The service role key for the newly deployed Supabase service.
+  supabase_anon_key:
+    description: The anon key for the newly deployed Supabase service.
+  app_url:
+    description: The URL of the newly deployed frontend web application.
+  service_uuid:
+    description: The UUID of the newly deployed service.
+  app_uuid:
+    description: The UUID of the newly deployed web application.
 
 runs:
   using: node20

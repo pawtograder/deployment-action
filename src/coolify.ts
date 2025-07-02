@@ -1,0 +1,639 @@
+import { exec } from '@actions/exec'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { randomBytes } from 'crypto'
+import { readdir, readFile, stat } from 'fs/promises'
+import JSZip from 'jszip'
+import { join, relative } from 'path'
+import { Connection } from 'postgrejs'
+import { createClient } from './client/client/client.js'
+import { Client } from './client/client/types.js'
+import {
+  createEnvByApplicationUuid,
+  createEnvByServiceUuid,
+  createPrivateGithubAppApplication,
+  createService,
+  getApplicationByUuid,
+  getServiceByUuid,
+  listApplications,
+  listEnvsByServiceUuid,
+  listServers,
+  listServices,
+  startApplicationByUuid,
+  startServiceByUuid,
+  updateEnvsByServiceUuid,
+  updateServiceByUuid
+} from './client/sdk.gen.js'
+import { TCPTunnelClient } from './tcp-tunnel.js'
+
+export default class Coolify {
+  readonly client: Client
+  private readonly baseUrl: string
+  private readonly project_uuid: string
+  private readonly environment_uuid: string
+  private readonly environment_name: string
+  private readonly server_uuid?: string
+  private readonly base_deployment_url: string
+  private readonly deployment_app_uuid: string
+  supabase_api_url: string
+
+  constructor({
+    baseUrl,
+    token,
+    project_uuid,
+    environment_uuid,
+    environment_name,
+    server_uuid,
+    supabase_api_url,
+    base_deployment_url,
+    deployment_app_uuid
+  }: {
+    baseUrl: string
+    token: string
+    project_uuid: string
+    environment_uuid: string
+    environment_name: string
+    supabase_api_url: string
+    server_uuid?: string
+    base_deployment_url: string
+    deployment_app_uuid: string
+  }) {
+    this.baseUrl = baseUrl
+    this.client = createClient({
+      baseUrl,
+      auth: async () => {
+        return token
+      }
+    })
+    this.project_uuid = project_uuid
+    this.environment_uuid = environment_uuid
+    this.environment_name = environment_name
+    this.server_uuid = server_uuid
+    this.supabase_api_url = supabase_api_url
+    this.base_deployment_url = base_deployment_url
+    this.deployment_app_uuid = deployment_app_uuid
+  }
+  private async deployFunctions({
+    token,
+    serviceUuid,
+    folderPath
+  }: {
+    token: string
+    serviceUuid: string
+    folderPath: string
+  }) {
+    const zip = new JSZip()
+
+    // Recursive function to add files to zip
+    async function addFolderToZip(
+      dirPath: string,
+      basePath: string,
+      depth: number = 0
+    ) {
+      const items = await readdir(dirPath)
+
+      for (const item of items) {
+        const fullPath = join(dirPath, item)
+        const relativePath = relative(basePath, fullPath)
+        const itemStat = await stat(fullPath)
+
+        if (itemStat.isDirectory()) {
+          await addFolderToZip(fullPath, basePath, depth + 1)
+        } else {
+          const fileContent = await readFile(fullPath)
+          zip.file(relativePath, fileContent)
+          if (depth === 1 && item === 'index.ts') {
+            console.log(`Deploying ${relativePath}`)
+          }
+        }
+      }
+    }
+
+    const functionsFolder = join(folderPath, 'supabase', 'functions')
+    // Add all files from the folder to the zip
+    await addFolderToZip(functionsFolder, functionsFolder)
+    zip.file(
+      'config.toml',
+      await readFile(join(folderPath, 'supabase', 'config.toml'))
+    )
+
+    // Generate the zip file
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' })
+
+    const formData = new FormData()
+    formData.append('file', new Blob([zipBuffer]), 'functions.zip')
+
+    await fetch(`${this.supabase_api_url}/${serviceUuid}/deploy`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: formData
+    })
+  }
+
+  private async waitUntilServiceOrAppisReady({
+    serviceUUID,
+    appUUID,
+    timeout_seconds
+  }: {
+    serviceUUID?: string
+    appUUID?: string
+    timeout_seconds?: number
+  }) {
+    const client = this.client
+    return new Promise((resolve, reject) => {
+      const timeout = timeout_seconds ?? 600
+      const expirationTimeout = setTimeout(() => {
+        clearInterval(interval)
+        reject(new Error('Timeout waiting for service or app to be ready'))
+      }, timeout * 1000)
+      async function checkStatus() {
+        if (serviceUUID) {
+          const serviceStatus = await getServiceByUuid({
+            client,
+            path: {
+              uuid: serviceUUID
+            }
+          })
+          if (serviceStatus.data && 'status' in serviceStatus.data) {
+            console.log('Service status:')
+            console.log(serviceStatus.data['status'])
+            if (serviceStatus.data['status'] === 'running:healthy') {
+              clearInterval(interval)
+              clearTimeout(expirationTimeout)
+              resolve(true)
+            }
+          } else {
+            console.log('No status found')
+            console.log(JSON.stringify(serviceStatus.data, null, 2))
+          }
+        } else if (appUUID) {
+          const appStatus = await getApplicationByUuid({
+            client,
+            path: {
+              uuid: appUUID
+            }
+          })
+          if (appStatus.data && 'status' in appStatus.data) {
+            console.log('App status:')
+            console.log(appStatus.data['status'])
+            if (
+              appStatus.data['status'] &&
+              appStatus.data['status'].startsWith('running')
+            ) {
+              clearInterval(interval)
+              clearTimeout(expirationTimeout)
+              resolve(true)
+            }
+          } else {
+            console.log('No status found')
+            console.log(JSON.stringify(appStatus.data, null, 2))
+          }
+        } else {
+          throw new Error('No service or app UUID provided')
+        }
+      }
+      const interval = setInterval(checkStatus, 1000)
+      checkStatus()
+    })
+  }
+
+  private async getServerUUID() {
+    const servers = await listServers({ client: this.client })
+    if (!servers.data || servers.data.length === 0 || !servers.data[0].uuid) {
+      throw new Error('No servers found')
+    }
+    return servers.data[0].uuid
+  }
+  private async getSupabaseServiceUUIDOrCreateNewOne({
+    supabaseComponentName,
+    ephemeral
+  }: {
+    supabaseComponentName: string
+    ephemeral: boolean
+  }) {
+    const existingServices = await listServices({ client: this.client })
+    const existingSupabaseService = existingServices.data?.find(
+      (service) => service.name === supabaseComponentName
+    )
+    let backendServiceUUID: string
+    let createdNewSupabaseService: boolean = false
+    if (existingSupabaseService && existingSupabaseService.uuid) {
+      backendServiceUUID = existingSupabaseService.uuid
+    } else {
+      console.log(`Creating new supabase service ${supabaseComponentName}`)
+      createdNewSupabaseService = true
+      const updatedDockerCompose = await readFile(
+        './supabase-pawtograder.yml',
+        'utf-8'
+      )
+      //Create backend service
+      const backendService = await createService({
+        client: this.client,
+        body: {
+          name: supabaseComponentName,
+          description: ephemeral
+            ? `Ephemeral Supabase service for ${supabaseComponentName} launched at ${new Date().toISOString()}`
+            : undefined,
+          project_uuid: this.project_uuid,
+          server_uuid: this.server_uuid
+            ? this.server_uuid
+            : await this.getServerUUID(),
+          environment_uuid: this.environment_uuid,
+          type: 'supabase',
+          environment_name: this.environment_name,
+          instant_deploy: false,
+          docker_compose_raw:
+            Buffer.from(updatedDockerCompose).toString('base64')
+        }
+      })
+      if (!backendService.data?.uuid) {
+        console.error(backendService)
+        throw new Error('Backend service UUID not found')
+      }
+      backendServiceUUID = backendService.data.uuid
+
+      await updateServiceByUuid({
+        client: this.client,
+        path: {
+          uuid: backendServiceUUID
+        },
+        body: {
+          name: supabaseComponentName,
+          project_uuid: this.project_uuid,
+          server_uuid: this.server_uuid
+            ? this.server_uuid
+            : await this.getServerUUID(),
+          environment_uuid: this.environment_uuid,
+          environment_name: this.environment_name,
+          instant_deploy: false,
+          docker_compose_raw:
+            Buffer.from(updatedDockerCompose).toString('base64')
+        }
+      })
+
+      // Generate a random 64-character deployment key
+      const deploymentKey = randomBytes(32).toString('hex')
+      //Set the functions deployment key
+      await createEnvByServiceUuid({
+        client: this.client,
+        path: {
+          uuid: backendServiceUUID
+        },
+        body: {
+          key: 'SERVICE_SUPABASE_FUNCTIONS_DEPLOYMENT_KEY',
+          value: deploymentKey
+        }
+      })
+
+      await updateEnvsByServiceUuid({
+        client: this.client,
+        path: {
+          uuid: backendServiceUUID
+        },
+        body: {
+          data: [
+            {
+              key: 'ENABLE_EMAIL_AUTOCONFIRM',
+              value: 'true'
+            },
+            {
+              key: 'ENABLE_PHONE_SIGNUP',
+              value: 'false'
+            }
+          ]
+        }
+      })
+    }
+    const serviceEnvs = await listEnvsByServiceUuid({
+      client: this.client,
+      path: {
+        uuid: backendServiceUUID
+      }
+    })
+    function getServiceEnvOrThrow(key: string) {
+      const env = serviceEnvs.data?.find((env) => env.key === key)
+      if (!env || !env.value) {
+        throw new Error(`Environment variable ${key} not found`)
+      }
+      return env.value
+    }
+
+    const postgres_db = getServiceEnvOrThrow('POSTGRES_DB')
+    const postgres_hostname = getServiceEnvOrThrow('POSTGRES_HOSTNAME')
+    const postgres_port = getServiceEnvOrThrow('POSTGRES_PORT')
+    const postgres_password = getServiceEnvOrThrow('SERVICE_PASSWORD_POSTGRES')
+    const supabase_url = getServiceEnvOrThrow(
+      'SERVICE_FQDN_SUPABASEKONG'
+    ).replace(':8000', '')
+    const supabase_anon_key = getServiceEnvOrThrow('SERVICE_SUPABASEANON_KEY')
+    const supabase_service_role_key = getServiceEnvOrThrow(
+      'SERVICE_SUPABASESERVICE_KEY'
+    )
+    const deploymentKey = getServiceEnvOrThrow(
+      'SERVICE_SUPABASE_FUNCTIONS_DEPLOYMENT_KEY'
+    )
+
+    await createEnvByServiceUuid({
+      client: this.client,
+      path: {
+        uuid: backendServiceUUID
+      },
+      body: {
+        key: 'SERVICE_SUPABASE_URL',
+        value: supabase_url
+      }
+    })
+
+    if (createdNewSupabaseService) {
+      await startServiceByUuid({
+        client: this.client,
+        path: {
+          uuid: backendServiceUUID
+        }
+      })
+    }
+    return {
+      backendServiceUUID,
+      postgres_db,
+      postgres_hostname,
+      postgres_port,
+      postgres_password,
+      supabase_url,
+      supabase_anon_key,
+      supabase_service_role_key,
+      deploymentKey
+    }
+  }
+  async createDeployment({
+    ephemeral,
+    checkedOutProjectDir,
+    deploymentName,
+    repository,
+    gitBranch,
+    gitCommitSha
+  }: {
+    ephemeral: boolean
+    checkedOutProjectDir: string
+    deploymentName: string
+    repository: string
+    gitBranch: string
+    gitCommitSha: string
+  }) {
+    const supabaseComponentName = `${deploymentName}-supabase`
+    const {
+      backendServiceUUID,
+      postgres_db,
+      postgres_hostname,
+      postgres_port,
+      postgres_password,
+      supabase_url,
+      supabase_anon_key,
+      supabase_service_role_key,
+      deploymentKey
+    } = await this.getSupabaseServiceUUIDOrCreateNewOne({
+      supabaseComponentName,
+      ephemeral
+    })
+    console.log(`Backend service UUID: ${backendServiceUUID}`)
+
+    const frontendAppName = `${deploymentName}-frontend`
+    //If there is already a frontend app with the target name, delete it
+    const existingApplications = await listApplications({
+      client: this.client
+    })
+    console.log(
+      `Existing applications: ${existingApplications.data
+        ?.map((app) => app.name)
+        .join(', ')}`
+    )
+
+    console.log('Waiting for backend to start')
+    await this.waitUntilServiceOrAppisReady({
+      serviceUUID: backendServiceUUID
+    })
+    console.log('Backend started')
+
+    await this.deployFunctions({
+      token: deploymentKey,
+      serviceUuid: backendServiceUUID,
+      folderPath: checkedOutProjectDir
+    })
+
+    await this.pushMigrations({
+      serviceUUID: backendServiceUUID,
+      deployToken: deploymentKey,
+      checkedOutSupabaseDir: checkedOutProjectDir,
+      resetDb: true,
+      postgresPassword: postgres_password,
+      supabase_url,
+      supabase_service_role_key
+    })
+
+    const existingFrontendApp = existingApplications.data?.find(
+      (app) => app.name === frontendAppName
+    )
+    let appUUID = existingFrontendApp?.uuid
+    if (!existingFrontendApp) {
+      //Create frontend service, deploy it
+      const frontendApp = await createPrivateGithubAppApplication({
+        client: this.client,
+        body: {
+          name: frontendAppName,
+          project_uuid: this.project_uuid,
+          environment_uuid: this.environment_uuid,
+          description: ephemeral
+            ? `Ephemeral frontend app for ${deploymentName} launched at ${new Date().toISOString()}`
+            : undefined,
+          build_pack: 'nixpacks',
+          environment_name: this.environment_name,
+          server_uuid: this.server_uuid
+            ? this.server_uuid
+            : await this.getServerUUID(),
+          github_app_uuid: this.deployment_app_uuid,
+          git_repository: repository,
+          git_branch: gitBranch,
+          git_commit_sha: gitCommitSha,
+          ports_exposes: '3000',
+          domains: `https://${deploymentName}.${this.base_deployment_url}`
+        }
+      })
+      appUUID = frontendApp.data?.uuid
+      if (frontendApp.error) {
+        console.error(frontendApp)
+        throw new Error('Frontend app creation failed')
+      }
+      if (!appUUID) {
+        throw new Error('Frontend app UUID not found')
+      }
+      console.log(`Frontend app UUID: ${appUUID}`)
+
+      const client = this.client
+      async function createEnvForApp(
+        appUUID: string,
+        envs: { key: string; value: string }[]
+      ) {
+        for (const env of envs) {
+          await createEnvByApplicationUuid({
+            client,
+            path: {
+              uuid: appUUID
+            },
+            body: {
+              key: env.key,
+              value: env.value
+            }
+          })
+        }
+      }
+
+      await createEnvForApp(appUUID, [
+        { key: 'POSTGRES_DB', value: postgres_db },
+        { key: 'POSTGRES_HOSTNAME', value: postgres_hostname },
+        { key: 'POSTGRES_PORT', value: postgres_port },
+        { key: 'POSTGRES_PASSWORD', value: postgres_password },
+        { key: 'SUPABASE_SERVICE_ROLE_KEY', value: supabase_service_role_key },
+        { key: 'NEXT_PUBLIC_SUPABASE_URL', value: supabase_url },
+        { key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY', value: supabase_anon_key }
+      ])
+
+      //Deploy the frontend
+      await startApplicationByUuid({
+        client,
+        path: {
+          uuid: appUUID
+        }
+      })
+      //Wait for frontend to start
+      console.log('Waiting for frontend to start')
+      await this.waitUntilServiceOrAppisReady({
+        appUUID: appUUID
+      })
+      console.log('Frontend started')
+    }
+
+    return {
+      serviceUUID: backendServiceUUID,
+      appUUID,
+      appURL: `https://${deploymentName}.dev.pawtograder.net`,
+      supabase_url,
+      supabase_service_role_key,
+      supabase_anon_key
+    }
+  }
+
+  async pushMigrations({
+    serviceUUID,
+    deployToken,
+    checkedOutSupabaseDir,
+    postgresPassword,
+    resetDb,
+    supabase_url,
+    supabase_service_role_key
+  }: {
+    serviceUUID: string
+    deployToken: string
+    checkedOutSupabaseDir: string
+    postgresPassword: string
+    resetDb?: boolean
+    supabase_url: string
+    supabase_service_role_key: string
+  }) {
+    const localPort = 5432
+    const tunnel = new TCPTunnelClient(
+      `${this.supabase_api_url}/${serviceUUID}/postgres`,
+      localPort,
+      deployToken
+    )
+    console.log(`Starting a tunnel to postgres on local port ${localPort}`)
+    await tunnel.connect()
+    console.log('Tunnel connected')
+    let command = ''
+    if (!resetDb)
+      command = `supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
+    else {
+      const connection = new Connection(
+        `postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
+      )
+      console.log('Connecting to postgres to truncate storage and vault')
+      await connection.connect()
+      console.log('Connected to postgres')
+      await connection.query('TRUNCATE TABLE storage.buckets CASCADE')
+      await connection.query('TRUNCATE TABLE storage.objects CASCADE')
+      await connection.query('TRUNCATE TABLE vault.secrets CASCADE')
+      await connection.close()
+      console.log('Truncated storage and vault')
+      command = `supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
+    }
+    await exec(command, undefined, {
+      cwd: checkedOutSupabaseDir,
+      input: Buffer.from('y')
+    })
+    console.log('Migrations pushed')
+    if (resetDb) {
+      console.log('Preparing test user accounts')
+      const supabase = createSupabaseClient(
+        supabase_url,
+        supabase_service_role_key
+      )
+      const { data: studentData, error: studentError } =
+        await supabase.auth.admin.createUser({
+          email: 'student@pawtograder.net',
+          password: 'student',
+          email_confirm: true
+        })
+      if (studentError) {
+        console.error(studentError)
+        throw new Error('Failed to create student user')
+      }
+      const new_student_uid = studentData?.user?.id
+      const old_private_profile_id = await supabase
+        .from('user_roles')
+        .select('private_profile_id')
+        .eq('user_id', new_student_uid)
+        .single()
+      await supabase
+        .from('gradebook_column_students')
+        .delete()
+        .eq('student_id', old_private_profile_id.data?.private_profile_id)
+      await supabase.from('user_roles').delete().eq('user_id', new_student_uid)
+      await supabase
+        .from('user_roles')
+        .update({
+          user_id: new_student_uid
+        })
+        .eq('user_id', '22222222-2222-2222-2222-222222222222')
+
+      const { data: instructorData, error: instructorError } =
+        await supabase.auth.admin.createUser({
+          email: 'instructor@pawtograder.net',
+          password: 'instructor',
+          email_confirm: true
+        })
+      if (instructorError) {
+        console.error(instructorError)
+        throw new Error('Failed to create instructor user')
+      }
+      const instructor_old_private_profile_id = await supabase
+        .from('user_roles')
+        .select('private_profile_id')
+        .eq('user_id', instructorData?.user?.id)
+        .single()
+      if (!instructor_old_private_profile_id.data?.private_profile_id) {
+        throw new Error('Instructor old private profile id not found')
+      }
+      await supabase
+        .from('user_roles')
+        .delete()
+        .eq('user_id', instructorData?.user?.id)
+      await supabase
+        .from('user_roles')
+        .update({
+          user_id: instructorData?.user?.id
+        })
+        .eq('user_id', '11111111-1111-1111-1111-111111111111')
+      console.log('Instructor user created')
+    }
+    tunnel.disconnect()
+  }
+}

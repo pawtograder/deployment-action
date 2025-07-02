@@ -1,27 +1,58 @@
-import * as core from '@actions/core'
-import { wait } from './wait.js'
-
-/**
- * The main function for the action.
- *
- * @returns Resolves when the action is complete.
- */
+import { getInput, setOutput } from '@actions/core'
+import Coolify from './coolify.js'
+import { randomUUID } from 'crypto'
 export async function run(): Promise<void> {
-  try {
-    const ms: string = core.getInput('milliseconds')
+  const coolify_api_url = getInput('coolify_api_url')
+  const coolify_api_token = getInput('coolify_api_token')
+  const coolify_project_uuid = getInput('coolify_project_uuid')
+  const coolify_environment_uuid = getInput('coolify_environment_uuid')
+  const coolify_environment_name = getInput('coolify_environment_name')
+  const coolify_server_uuid = getInput('coolify_server_uuid')
+  const coolify_supabase_api_url = getInput('coolify_supabase_api_url')
+  const ephemeral = getInput('ephemeral')
+  const base_deployment_url = getInput('base_deployment_url')
+  const deployment_app_uuid = getInput('deployment_app_uuid')
 
-    // Debug logs are only output if the `ACTIONS_STEP_DEBUG` secret is true
-    core.debug(`Waiting ${ms} milliseconds ...`)
-
-    // Log the current timestamp, wait, then log the new timestamp
-    core.debug(new Date().toTimeString())
-    await wait(parseInt(ms, 10))
-    core.debug(new Date().toTimeString())
-
-    // Set outputs for other workflow steps to use
-    core.setOutput('time', new Date().toTimeString())
-  } catch (error) {
-    // Fail the workflow run if an error occurs
-    if (error instanceof Error) core.setFailed(error.message)
+  const coolify = new Coolify({
+    baseUrl: coolify_api_url,
+    token: coolify_api_token,
+    project_uuid: coolify_project_uuid,
+    environment_uuid: coolify_environment_uuid,
+    environment_name: coolify_environment_name,
+    server_uuid: coolify_server_uuid,
+    supabase_api_url: coolify_supabase_api_url,
+    base_deployment_url,
+    deployment_app_uuid
+  })
+  const branchOrPR = process.env.GITHUB_REF_NAME
+  const repositoryName = process.env.GITHUB_REPOSITORY
+  if (!branchOrPR || !repositoryName || !process.env.GITHUB_SHA) {
+    throw new Error('GITHUB_REF_NAME and GITHUB_REPOSITORY must be set')
   }
+
+  const deploymentName = ephemeral
+    ? `${branchOrPR}-${randomUUID()}`
+    : branchOrPR
+
+  const {
+    serviceUUID,
+    appUUID,
+    appURL,
+    supabase_url,
+    supabase_service_role_key,
+    supabase_anon_key
+  } = await coolify.createDeployment({
+    ephemeral: ephemeral === 'true',
+    checkedOutProjectDir: './',
+    deploymentName,
+    repository: repositoryName,
+    gitBranch: branchOrPR,
+    gitCommitSha: process.env.GITHUB_SHA
+  })
+  setOutput('supabase_url', supabase_url)
+  setOutput('supabase_service_role_key', supabase_service_role_key)
+  setOutput('supabase_anon_key', supabase_anon_key)
+  setOutput('app_url', appURL)
+  setOutput('service_uuid', serviceUUID)
+  setOutput('app_uuid', appUUID)
 }
