@@ -50525,11 +50525,22 @@ class Coolify {
     }
     async waitUntilServiceOrAppisReady({ serviceUUID, appUUID, timeout_seconds }) {
         const client = this.client;
+        if (serviceUUID) {
+            console.log(`Waiting for service ${serviceUUID} to be ready`);
+        }
+        else if (appUUID) {
+            console.log(`Waiting for app ${appUUID} to be ready`);
+        }
+        else {
+            throw new Error('No service or app UUID provided');
+        }
         return new Promise((resolve, reject) => {
             const timeout = timeout_seconds ?? 600;
             const expirationTimeout = setTimeout(() => {
                 clearInterval(interval);
-                reject(new Error('Timeout waiting for service or app to be ready'));
+                reject(new Error(serviceUUID
+                    ? `Timeout waiting for service ${serviceUUID} to be ready`
+                    : `Timeout waiting for app ${appUUID} to be ready`));
             }, timeout * 1000);
             async function checkStatus() {
                 if (serviceUUID) {
@@ -50540,8 +50551,6 @@ class Coolify {
                         }
                     });
                     if (serviceStatus.data && 'status' in serviceStatus.data) {
-                        console.log('Service status:');
-                        console.log(serviceStatus.data['status']);
                         if (serviceStatus.data['status'] === 'running:healthy') {
                             clearInterval(interval);
                             clearTimeout(expirationTimeout);
@@ -50585,6 +50594,7 @@ class Coolify {
     }
     async getServerUUID() {
         const servers = await listServers({ client: this.client });
+        console.log(servers);
         if (!servers.data || servers.data.length === 0 || !servers.data[0].uuid) {
             throw new Error('No servers found');
         }
@@ -50601,7 +50611,7 @@ class Coolify {
         else {
             console.log(`Creating new supabase service ${supabaseComponentName}`);
             createdNewSupabaseService = true;
-            const updatedDockerCompose = await readFile('./supabase-pawtograder.yml', 'utf-8');
+            const updatedDockerCompose = await readFile(require$$1$5.join(require$$1$5.dirname(new URL(import.meta.url).pathname), '../', 'supabase-pawtograder.yml'), 'utf-8');
             //Create backend service
             const backendService = await createService({
                 client: this.client,
@@ -50754,7 +50764,7 @@ class Coolify {
         await this.pushMigrations({
             serviceUUID: backendServiceUUID,
             deployToken: deploymentKey,
-            checkedOutSupabaseDir: checkedOutProjectDir,
+            checkedOutProjectDir,
             resetDb: true,
             postgresPassword: postgres_password
         });
@@ -50840,7 +50850,7 @@ class Coolify {
             supabase_anon_key
         };
     }
-    async pushMigrations({ serviceUUID, deployToken, checkedOutSupabaseDir, postgresPassword, resetDb }) {
+    async pushMigrations({ serviceUUID, deployToken, checkedOutProjectDir, postgresPassword, resetDb }) {
         const localPort = 5432;
         const tunnel = new TCPTunnelClient(`${this.supabase_api_url}/${serviceUUID}/postgres`, localPort, deployToken);
         console.log(`Starting a tunnel to postgres on local port ${localPort}`);
@@ -50848,17 +50858,17 @@ class Coolify {
         console.log('Tunnel connected');
         let command = '';
         if (!resetDb)
-            command = `supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`;
+            command = `./node_modules/.bin/supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`;
         else {
             const sql = Postgres(`postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`);
             await sql `TRUNCATE TABLE storage.buckets CASCADE`;
             await sql `TRUNCATE TABLE storage.objects CASCADE`;
             await sql `TRUNCATE TABLE vault.secrets CASCADE`;
             await sql.end();
-            command = `supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`;
+            command = `./node_modules/.bin/supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`;
         }
         await execExports.exec(command, undefined, {
-            cwd: checkedOutSupabaseDir,
+            cwd: checkedOutProjectDir,
             input: Buffer.from('y')
         });
         console.log('Migrations pushed');

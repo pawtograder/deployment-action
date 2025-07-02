@@ -13,7 +13,7 @@ inputs:
   deployment_app_uuid:
     description:
       The UUID of the Coolify GitHub app to use for generating deployments
-    required: false
+    required: true
   base_deployment_url:
     description:
       The base URL to deploy the web application to. This is used to generate

@@ -2,7 +2,7 @@ import { exec } from '@actions/exec'
 import { randomBytes } from 'crypto'
 import { readdir, readFile, stat } from 'fs/promises'
 import JSZip from 'jszip'
-import { join, relative } from 'path'
+import path, { join, relative } from 'path'
 import postgres from 'postgres'
 
 import { createClient } from './client/client/client.js'
@@ -132,11 +132,24 @@ export default class Coolify {
     timeout_seconds?: number
   }) {
     const client = this.client
+    if (serviceUUID) {
+      console.log(`Waiting for service ${serviceUUID} to be ready`)
+    } else if (appUUID) {
+      console.log(`Waiting for app ${appUUID} to be ready`)
+    } else {
+      throw new Error('No service or app UUID provided')
+    }
     return new Promise((resolve, reject) => {
       const timeout = timeout_seconds ?? 600
       const expirationTimeout = setTimeout(() => {
         clearInterval(interval)
-        reject(new Error('Timeout waiting for service or app to be ready'))
+        reject(
+          new Error(
+            serviceUUID
+              ? `Timeout waiting for service ${serviceUUID} to be ready`
+              : `Timeout waiting for app ${appUUID} to be ready`
+          )
+        )
       }, timeout * 1000)
       async function checkStatus() {
         if (serviceUUID) {
@@ -147,8 +160,6 @@ export default class Coolify {
             }
           })
           if (serviceStatus.data && 'status' in serviceStatus.data) {
-            console.log('Service status:')
-            console.log(serviceStatus.data['status'])
             if (serviceStatus.data['status'] === 'running:healthy') {
               clearInterval(interval)
               clearTimeout(expirationTimeout)
@@ -191,6 +202,7 @@ export default class Coolify {
 
   private async getServerUUID() {
     const servers = await listServers({ client: this.client })
+    console.log(servers)
     if (!servers.data || servers.data.length === 0 || !servers.data[0].uuid) {
       throw new Error('No servers found')
     }
@@ -215,7 +227,11 @@ export default class Coolify {
       console.log(`Creating new supabase service ${supabaseComponentName}`)
       createdNewSupabaseService = true
       const updatedDockerCompose = await readFile(
-        './supabase-pawtograder.yml',
+        path.join(
+          path.dirname(new URL(import.meta.url).pathname),
+          '../',
+          'supabase-pawtograder.yml'
+        ),
         'utf-8'
       )
       //Create backend service
@@ -414,7 +430,7 @@ export default class Coolify {
     await this.pushMigrations({
       serviceUUID: backendServiceUUID,
       deployToken: deploymentKey,
-      checkedOutSupabaseDir: checkedOutProjectDir,
+      checkedOutProjectDir,
       resetDb: true,
       postgresPassword: postgres_password
     })
@@ -514,13 +530,13 @@ export default class Coolify {
   async pushMigrations({
     serviceUUID,
     deployToken,
-    checkedOutSupabaseDir,
+    checkedOutProjectDir,
     postgresPassword,
     resetDb
   }: {
     serviceUUID: string
     deployToken: string
-    checkedOutSupabaseDir: string
+    checkedOutProjectDir: string
     postgresPassword: string
     resetDb?: boolean
   }) {
@@ -535,7 +551,7 @@ export default class Coolify {
     console.log('Tunnel connected')
     let command = ''
     if (!resetDb)
-      command = `supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
+      command = `./node_modules/.bin/supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
     else {
       const sql = postgres(
         `postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
@@ -544,10 +560,10 @@ export default class Coolify {
       await sql`TRUNCATE TABLE storage.objects CASCADE`
       await sql`TRUNCATE TABLE vault.secrets CASCADE`
       await sql.end()
-      command = `supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
+      command = `./node_modules/.bin/supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
     }
     await exec(command, undefined, {
-      cwd: checkedOutSupabaseDir,
+      cwd: checkedOutProjectDir,
       input: Buffer.from('y')
     })
     console.log('Migrations pushed')
