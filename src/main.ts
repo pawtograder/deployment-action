@@ -1,7 +1,8 @@
 import { getInput, setOutput } from '@actions/core'
 import Coolify from './coolify.js'
 import { randomUUID } from 'crypto'
-export async function run(): Promise<void> {
+
+export async function run() {
   const coolify_api_url = getInput('coolify_api_url')
   const coolify_api_token = getInput('coolify_api_token')
   const coolify_project_uuid = getInput('coolify_project_uuid')

@@ -3,7 +3,8 @@ import { randomBytes } from 'crypto'
 import { readdir, readFile, stat } from 'fs/promises'
 import JSZip from 'jszip'
 import { join, relative } from 'path'
-import { Connection } from 'postgrejs'
+import postgres from 'postgres'
+
 import { createClient } from './client/client/client.js'
 import { Client } from './client/client/types.js'
 import {
@@ -25,7 +26,7 @@ import {
 import { TCPTunnelClient } from './tcp-tunnel.js'
 
 export default class Coolify {
-  readonly client: Client
+  private readonly client: Client
   private readonly project_uuid: string
   private readonly environment_uuid: string
   private readonly environment_name: string
@@ -79,7 +80,6 @@ export default class Coolify {
     folderPath: string
   }) {
     const zip = new JSZip()
-
     // Recursive function to add files to zip
     async function addFolderToZip(
       dirPath: string,
@@ -87,12 +87,10 @@ export default class Coolify {
       depth: number = 0
     ) {
       const items = await readdir(dirPath)
-
       for (const item of items) {
         const fullPath = join(dirPath, item)
         const relativePath = relative(basePath, fullPath)
         const itemStat = await stat(fullPath)
-
         if (itemStat.isDirectory()) {
           await addFolderToZip(fullPath, basePath, depth + 1)
         } else {
@@ -104,7 +102,6 @@ export default class Coolify {
         }
       }
     }
-
     const functionsFolder = join(folderPath, 'supabase', 'functions')
     // Add all files from the folder to the zip
     await addFolderToZip(functionsFolder, functionsFolder)
@@ -112,13 +109,10 @@ export default class Coolify {
       'config.toml',
       await readFile(join(folderPath, 'supabase', 'config.toml'))
     )
-
     // Generate the zip file
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' })
-
     const formData = new FormData()
     formData.append('file', new Blob([zipBuffer]), 'functions.zip')
-
     await fetch(`${this.supabase_api_url}/${serviceUuid}/deploy`, {
       method: 'POST',
       headers: {
@@ -422,9 +416,7 @@ export default class Coolify {
       deployToken: deploymentKey,
       checkedOutSupabaseDir: checkedOutProjectDir,
       resetDb: true,
-      postgresPassword: postgres_password,
-      supabase_url,
-      supabase_service_role_key
+      postgresPassword: postgres_password
     })
 
     const existingFrontendApp = existingApplications.data?.find(
@@ -524,17 +516,13 @@ export default class Coolify {
     deployToken,
     checkedOutSupabaseDir,
     postgresPassword,
-    resetDb,
-    supabase_url,
-    supabase_service_role_key
+    resetDb
   }: {
     serviceUUID: string
     deployToken: string
     checkedOutSupabaseDir: string
     postgresPassword: string
     resetDb?: boolean
-    supabase_url: string
-    supabase_service_role_key: string
   }) {
     const localPort = 5432
     const tunnel = new TCPTunnelClient(
@@ -549,17 +537,13 @@ export default class Coolify {
     if (!resetDb)
       command = `supabase db push --include-all --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
     else {
-      const connection = new Connection(
+      const sql = postgres(
         `postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
       )
-      console.log('Connecting to postgres to truncate storage and vault')
-      await connection.connect()
-      console.log('Connected to postgres')
-      await connection.query('TRUNCATE TABLE storage.buckets CASCADE')
-      await connection.query('TRUNCATE TABLE storage.objects CASCADE')
-      await connection.query('TRUNCATE TABLE vault.secrets CASCADE')
-      await connection.close()
-      console.log('Truncated storage and vault')
+      await sql`TRUNCATE TABLE storage.buckets CASCADE`
+      await sql`TRUNCATE TABLE storage.objects CASCADE`
+      await sql`TRUNCATE TABLE vault.secrets CASCADE`
+      await sql.end()
       command = `supabase db reset --db-url postgres://postgres:${postgresPassword}@localhost:${localPort}/postgres`
     }
     await exec(command, undefined, {

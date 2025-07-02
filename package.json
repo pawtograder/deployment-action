@@ -39,10 +39,8 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@actions/exec": "^1.1.1",
-    "@supabase/supabase-js": "^2.50.2",
     "jszip": "^3.10.1",
-    "postgrejs": "^2.22.4",
-    "supabase": "^2.26.9",
+    "postgres": "^3.4.7",
     "ws": "^8.18.3"
   },
   "devDependencies": {
@@ -52,7 +50,7 @@
     "@jest/globals": "^30.0.0",
     "@rollup/plugin-commonjs": "^28.0.1",
     "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-typescript": "^12.1.1",
+    "@rollup/plugin-typescript": "^12.1.4",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.0",
     "@types/ws": "^8.18.1",
@@ -74,6 +72,6 @@
     "typescript": "^5.8.3"
   },
   "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "*"
+    "@rollup/rollup-linux-x64-gnu": "^4.44.1"
   }
 }
