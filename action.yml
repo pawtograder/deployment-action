@@ -11,10 +11,13 @@ branding:
 # Define your inputs here.
 inputs:
   deployment_app_uuid:
-    description: The UUID of the Coolify GitHub app to use for generating deployments
+    description:
+      The UUID of the Coolify GitHub app to use for generating deployments
     required: false
   base_deployment_url:
-    description: The base URL to deploy the web application to. This is used to generate the deployment URL.
+    description:
+      The base URL to deploy the web application to. This is used to generate
+      the deployment URL.
     required: false
     default: 'dev.pawtograder.net'
   ephemeral:

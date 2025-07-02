@@ -1,5 +1,4 @@
 import { exec } from '@actions/exec'
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { randomBytes } from 'crypto'
 import { readdir, readFile, stat } from 'fs/promises'
 import JSZip from 'jszip'
@@ -27,7 +26,6 @@ import { TCPTunnelClient } from './tcp-tunnel.js'
 
 export default class Coolify {
   readonly client: Client
-  private readonly baseUrl: string
   private readonly project_uuid: string
   private readonly environment_uuid: string
   private readonly environment_name: string
@@ -57,7 +55,6 @@ export default class Coolify {
     base_deployment_url: string
     deployment_app_uuid: string
   }) {
-    this.baseUrl = baseUrl
     this.client = createClient({
       baseUrl,
       auth: async () => {
@@ -570,70 +567,6 @@ export default class Coolify {
       input: Buffer.from('y')
     })
     console.log('Migrations pushed')
-    if (resetDb) {
-      console.log('Preparing test user accounts')
-      const supabase = createSupabaseClient(
-        supabase_url,
-        supabase_service_role_key
-      )
-      const { data: studentData, error: studentError } =
-        await supabase.auth.admin.createUser({
-          email: 'student@pawtograder.net',
-          password: 'student',
-          email_confirm: true
-        })
-      if (studentError) {
-        console.error(studentError)
-        throw new Error('Failed to create student user')
-      }
-      const new_student_uid = studentData?.user?.id
-      const old_private_profile_id = await supabase
-        .from('user_roles')
-        .select('private_profile_id')
-        .eq('user_id', new_student_uid)
-        .single()
-      await supabase
-        .from('gradebook_column_students')
-        .delete()
-        .eq('student_id', old_private_profile_id.data?.private_profile_id)
-      await supabase.from('user_roles').delete().eq('user_id', new_student_uid)
-      await supabase
-        .from('user_roles')
-        .update({
-          user_id: new_student_uid
-        })
-        .eq('user_id', '22222222-2222-2222-2222-222222222222')
-
-      const { data: instructorData, error: instructorError } =
-        await supabase.auth.admin.createUser({
-          email: 'instructor@pawtograder.net',
-          password: 'instructor',
-          email_confirm: true
-        })
-      if (instructorError) {
-        console.error(instructorError)
-        throw new Error('Failed to create instructor user')
-      }
-      const instructor_old_private_profile_id = await supabase
-        .from('user_roles')
-        .select('private_profile_id')
-        .eq('user_id', instructorData?.user?.id)
-        .single()
-      if (!instructor_old_private_profile_id.data?.private_profile_id) {
-        throw new Error('Instructor old private profile id not found')
-      }
-      await supabase
-        .from('user_roles')
-        .delete()
-        .eq('user_id', instructorData?.user?.id)
-      await supabase
-        .from('user_roles')
-        .update({
-          user_id: instructorData?.user?.id
-        })
-        .eq('user_id', '11111111-1111-1111-1111-111111111111')
-      console.log('Instructor user created')
-    }
     tunnel.disconnect()
   }
 }

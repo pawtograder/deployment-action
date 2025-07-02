@@ -14,8 +14,5 @@
     "node_modules",
     ".tsimp"
   ],
-  "include": [
-    "src",
-    "local-scripts"
-  ]
+  "include": ["src", "local-scripts"]
 }
