@@ -48872,7 +48872,7 @@ const mergeHeaders = (...headers) => {
         if (!header || typeof header !== 'object') {
             continue;
         }
-        const iterator = header instanceof Headers ? header.entries() : Object.entries(header);
+        const iterator = Object.entries(header);
         for (const [key, value] of iterator) {
             if (value === null) {
                 mergedHeaders.delete(key);
