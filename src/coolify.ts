@@ -177,8 +177,6 @@ export default class Coolify {
             }
           })
           if (appStatus.data && 'status' in appStatus.data) {
-            console.log('App status:')
-            console.log(appStatus.data['status'])
             if (
               appStatus.data['status'] &&
               appStatus.data['status'].startsWith('running')
