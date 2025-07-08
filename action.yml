@@ -52,6 +52,20 @@ inputs:
       The URL of the Supabase deployment service. See
       https://github.com/pawtograder/supabase-coolify-deployment
     required: true
+  cleanup_service_uuid:
+    description:
+      The UUID of the service to clean up. This is used to clean up the
+      deployment after the deployment is complete.
+    required: false
+    default: ''
+    type: string
+  cleanup_app_uuid:
+    description:
+      The UUID of the app to clean up. This is used to clean up the deployment
+      after the deployment is complete.
+    required: false
+    default: ''
+    type: string
 
 # Define your outputs here.
 outputs:

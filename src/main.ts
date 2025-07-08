@@ -13,6 +13,8 @@ export async function run() {
   const ephemeral = getInput('ephemeral')
   const base_deployment_url = getInput('base_deployment_url')
   const deployment_app_uuid = getInput('deployment_app_uuid')
+  const cleanup_service_uuid = getInput('cleanup_service_uuid')
+  const cleanup_app_uuid = getInput('cleanup_app_uuid')
 
   const coolify = new Coolify({
     baseUrl: coolify_api_url,
@@ -31,29 +33,37 @@ export async function run() {
     throw new Error('GITHUB_REF_NAME and GITHUB_REPOSITORY must be set')
   }
 
-  const deploymentName = ephemeral
-    ? `${branchOrPR}-${randomUUID()}`
-    : branchOrPR
+  const deploymentName =
+    ephemeral.toLowerCase() === 'true'
+      ? `${branchOrPR}-${randomUUID()}`
+      : branchOrPR
 
-  const {
-    serviceUUID,
-    appUUID,
-    appURL,
-    supabase_url,
-    supabase_service_role_key,
-    supabase_anon_key
-  } = await coolify.createDeployment({
-    ephemeral: ephemeral === 'true',
-    checkedOutProjectDir: './',
-    deploymentName,
-    repository: repositoryName,
-    gitBranch: branchOrPR,
-    gitCommitSha: process.env.GITHUB_SHA
-  })
-  setOutput('supabase_url', supabase_url)
-  setOutput('supabase_service_role_key', supabase_service_role_key)
-  setOutput('supabase_anon_key', supabase_anon_key)
-  setOutput('app_url', appURL)
-  setOutput('service_uuid', serviceUUID)
-  setOutput('app_uuid', appUUID)
+  if (cleanup_service_uuid || cleanup_app_uuid) {
+    await coolify.cleanup({
+      cleanup_service_uuid,
+      cleanup_app_uuid
+    })
+  } else {
+    const {
+      serviceUUID,
+      appUUID,
+      appURL,
+      supabase_url,
+      supabase_service_role_key,
+      supabase_anon_key
+    } = await coolify.createDeployment({
+      ephemeral: ephemeral === 'true',
+      checkedOutProjectDir: './',
+      deploymentName,
+      repository: repositoryName,
+      gitBranch: branchOrPR,
+      gitCommitSha: process.env.GITHUB_SHA
+    })
+    setOutput('supabase_url', supabase_url)
+    setOutput('supabase_service_role_key', supabase_service_role_key)
+    setOutput('supabase_anon_key', supabase_anon_key)
+    setOutput('app_url', appURL)
+    setOutput('service_uuid', serviceUUID)
+    setOutput('app_uuid', appUUID)
+  }
 }

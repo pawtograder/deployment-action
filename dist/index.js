@@ -45202,6 +45202,22 @@ const createPrivateGithubAppApplication = (options) => {
     });
 };
 /**
+ * Delete
+ * Delete application by UUID.
+ */
+const deleteApplicationByUuid = (options) => {
+    return (options.client ?? client).delete({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/applications/{uuid}',
+        ...options
+    });
+};
+/**
  * Get
  * Get application by UUID.
  */
@@ -45303,6 +45319,22 @@ const createService = (options) => {
             'Content-Type': 'application/json',
             ...options.headers
         }
+    });
+};
+/**
+ * Delete
+ * Delete service by UUID.
+ */
+const deleteServiceByUuid = (options) => {
+    return (options.client ?? client).delete({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/services/{uuid}',
+        ...options
     });
 };
 /**
@@ -50734,6 +50766,36 @@ class Coolify {
             deploymentKey
         };
     }
+    async cleanup({ cleanup_service_uuid, cleanup_app_uuid }) {
+        const existingServices = await listServices({ client: this.client });
+        const existingSupabaseService = existingServices.data?.find((service) => service.uuid === cleanup_service_uuid);
+        if (existingSupabaseService && existingSupabaseService.uuid) {
+            await deleteServiceByUuid({
+                client: this.client,
+                path: {
+                    uuid: existingSupabaseService.uuid
+                }
+            });
+        }
+        else {
+            console.log(`Supabase service ${cleanup_service_uuid} not found`);
+        }
+        const existingApplications = await listApplications({
+            client: this.client
+        });
+        const frontendApp = existingApplications.data?.find((app) => app.uuid === cleanup_app_uuid);
+        if (frontendApp && frontendApp.uuid) {
+            await deleteApplicationByUuid({
+                client: this.client,
+                path: {
+                    uuid: frontendApp.uuid
+                }
+            });
+        }
+        else {
+            console.log(`Frontend app ${cleanup_app_uuid} not found`);
+        }
+    }
     async createDeployment({ ephemeral, checkedOutProjectDir, deploymentName, repository, gitBranch, gitCommitSha }) {
         const supabaseComponentName = `${deploymentName}-supabase`;
         const { backendServiceUUID, postgres_db, postgres_hostname, postgres_port, postgres_password, supabase_url, supabase_anon_key, supabase_service_role_key, deploymentKey } = await this.getSupabaseServiceUUIDOrCreateNewOne({
@@ -50885,6 +50947,8 @@ async function run() {
     const ephemeral = coreExports.getInput('ephemeral');
     const base_deployment_url = coreExports.getInput('base_deployment_url');
     const deployment_app_uuid = coreExports.getInput('deployment_app_uuid');
+    const cleanup_service_uuid = coreExports.getInput('cleanup_service_uuid');
+    const cleanup_app_uuid = coreExports.getInput('cleanup_app_uuid');
     const coolify = new Coolify({
         baseUrl: coolify_api_url,
         token: coolify_api_token,
@@ -50901,23 +50965,31 @@ async function run() {
     if (!branchOrPR || !repositoryName || !process.env.GITHUB_SHA) {
         throw new Error('GITHUB_REF_NAME and GITHUB_REPOSITORY must be set');
     }
-    const deploymentName = ephemeral
+    const deploymentName = ephemeral.toLowerCase() === 'true'
         ? `${branchOrPR}-${randomUUID()}`
         : branchOrPR;
-    const { serviceUUID, appUUID, appURL, supabase_url, supabase_service_role_key, supabase_anon_key } = await coolify.createDeployment({
-        ephemeral: ephemeral === 'true',
-        checkedOutProjectDir: './',
-        deploymentName,
-        repository: repositoryName,
-        gitBranch: branchOrPR,
-        gitCommitSha: process.env.GITHUB_SHA
-    });
-    coreExports.setOutput('supabase_url', supabase_url);
-    coreExports.setOutput('supabase_service_role_key', supabase_service_role_key);
-    coreExports.setOutput('supabase_anon_key', supabase_anon_key);
-    coreExports.setOutput('app_url', appURL);
-    coreExports.setOutput('service_uuid', serviceUUID);
-    coreExports.setOutput('app_uuid', appUUID);
+    if (cleanup_service_uuid || cleanup_app_uuid) {
+        await coolify.cleanup({
+            cleanup_service_uuid,
+            cleanup_app_uuid
+        });
+    }
+    else {
+        const { serviceUUID, appUUID, appURL, supabase_url, supabase_service_role_key, supabase_anon_key } = await coolify.createDeployment({
+            ephemeral: ephemeral === 'true',
+            checkedOutProjectDir: './',
+            deploymentName,
+            repository: repositoryName,
+            gitBranch: branchOrPR,
+            gitCommitSha: process.env.GITHUB_SHA
+        });
+        coreExports.setOutput('supabase_url', supabase_url);
+        coreExports.setOutput('supabase_service_role_key', supabase_service_role_key);
+        coreExports.setOutput('supabase_anon_key', supabase_anon_key);
+        coreExports.setOutput('app_url', appURL);
+        coreExports.setOutput('service_uuid', serviceUUID);
+        coreExports.setOutput('app_uuid', appUUID);
+    }
 }
 
 /**

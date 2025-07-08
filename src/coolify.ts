@@ -12,6 +12,8 @@ import {
   createEnvByServiceUuid,
   createPrivateGithubAppApplication,
   createService,
+  deleteServiceByUuid,
+  deleteApplicationByUuid,
   getApplicationByUuid,
   getServiceByUuid,
   listApplications,
@@ -26,7 +28,7 @@ import {
 import { TCPTunnelClient } from './tcp-tunnel.js'
 
 export default class Coolify {
-  private readonly client: Client
+  readonly client: Client
   private readonly project_uuid: string
   private readonly environment_uuid: string
   private readonly environment_name: string
@@ -368,6 +370,44 @@ export default class Coolify {
       supabase_anon_key,
       supabase_service_role_key,
       deploymentKey
+    }
+  }
+  async cleanup({
+    cleanup_service_uuid,
+    cleanup_app_uuid
+  }: {
+    cleanup_service_uuid: string
+    cleanup_app_uuid: string
+  }) {
+    const existingServices = await listServices({ client: this.client })
+    const existingSupabaseService = existingServices.data?.find(
+      (service) => service.uuid === cleanup_service_uuid
+    )
+    if (existingSupabaseService && existingSupabaseService.uuid) {
+      await deleteServiceByUuid({
+        client: this.client,
+        path: {
+          uuid: existingSupabaseService.uuid
+        }
+      })
+    } else {
+      console.log(`Supabase service ${cleanup_service_uuid} not found`)
+    }
+    const existingApplications = await listApplications({
+      client: this.client
+    })
+    const frontendApp = existingApplications.data?.find(
+      (app) => app.uuid === cleanup_app_uuid
+    )
+    if (frontendApp && frontendApp.uuid) {
+      await deleteApplicationByUuid({
+        client: this.client,
+        path: {
+          uuid: frontendApp.uuid
+        }
+      })
+    } else {
+      console.log(`Frontend app ${cleanup_app_uuid} not found`)
     }
   }
   async createDeployment({
