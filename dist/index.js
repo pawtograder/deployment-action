@@ -45234,6 +45234,26 @@ const getApplicationByUuid = (options) => {
     });
 };
 /**
+ * Update
+ * Update application by UUID.
+ */
+const updateApplicationByUuid = (options) => {
+    return (options.client ?? client).patch({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/applications/{uuid}',
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+        }
+    });
+};
+/**
  * Create Env
  * Create env by application UUID.
  */
@@ -45266,6 +45286,22 @@ const startApplicationByUuid = (options) => {
             }
         ],
         url: '/applications/{uuid}/start',
+        ...options
+    });
+};
+/**
+ * Deploy
+ * Deploy by tag or uuid. `Post` request also accepted with `uuid` and `tag` json body.
+ */
+const deployByTagOrUuid = (options) => {
+    return (options?.client ?? client).get({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/deploy',
         ...options
     });
 };
@@ -50634,11 +50670,14 @@ class Coolify {
         const existingServices = await listServices({ client: this.client });
         const existingSupabaseService = existingServices.data?.find((service) => service.name === supabaseComponentName);
         let backendServiceUUID;
+        let isNewSupabaseService = false;
         let createdNewSupabaseService = false;
         if (existingSupabaseService && existingSupabaseService.uuid) {
             backendServiceUUID = existingSupabaseService.uuid;
+            isNewSupabaseService = false;
         }
         else {
+            isNewSupabaseService = true;
             console.log(`Creating new supabase service ${supabaseComponentName}`);
             createdNewSupabaseService = true;
             const updatedDockerCompose = await readFile(require$$1$5.join(require$$1$5.dirname(new URL(import.meta.url).pathname), '../', 'supabase-pawtograder.yml'), 'utf-8');
@@ -50763,7 +50802,8 @@ class Coolify {
             supabase_url,
             supabase_anon_key,
             supabase_service_role_key,
-            deploymentKey
+            deploymentKey,
+            isNewSupabaseService
         };
     }
     async cleanup({ cleanup_service_uuid, cleanup_app_uuid }) {
@@ -50798,7 +50838,7 @@ class Coolify {
     }
     async createDeployment({ ephemeral, checkedOutProjectDir, deploymentName, repository, gitBranch, gitCommitSha }) {
         const supabaseComponentName = `${deploymentName}-supabase`;
-        const { backendServiceUUID, postgres_db, postgres_hostname, postgres_port, postgres_password, supabase_url, supabase_anon_key, supabase_service_role_key, deploymentKey } = await this.getSupabaseServiceUUIDOrCreateNewOne({
+        const { backendServiceUUID, postgres_db, postgres_hostname, postgres_port, postgres_password, supabase_url, supabase_anon_key, supabase_service_role_key, deploymentKey, isNewSupabaseService } = await this.getSupabaseServiceUUIDOrCreateNewOne({
             supabaseComponentName,
             ephemeral
         });
@@ -50825,12 +50865,12 @@ class Coolify {
             serviceUUID: backendServiceUUID,
             deployToken: deploymentKey,
             checkedOutProjectDir,
-            resetDb: true,
+            resetDb: isNewSupabaseService,
             postgresPassword: postgres_password
         });
         const existingFrontendApp = existingApplications.data?.find((app) => app.name === frontendAppName);
         let appUUID = existingFrontendApp?.uuid;
-        if (!existingFrontendApp) {
+        if (!existingFrontendApp || !appUUID) {
             //Create frontend service, deploy it
             const frontendApp = await createPrivateGithubAppApplication({
                 client: this.client,
@@ -50900,6 +50940,28 @@ class Coolify {
                 appUUID: appUUID
             });
             console.log('Frontend started');
+        }
+        else {
+            //Update the commit SHA of the frontend app
+            await updateApplicationByUuid({
+                client: this.client,
+                path: {
+                    uuid: appUUID
+                },
+                body: {
+                    git_commit_sha: gitCommitSha
+                }
+            });
+            console.log(`Deploying frontend app ${appUUID} with commit ${gitCommitSha}`);
+            await deployByTagOrUuid({
+                client: this.client,
+                query: {
+                    uuid: appUUID
+                }
+            });
+            await this.waitUntilServiceOrAppisReady({
+                appUUID: appUUID
+            });
         }
         return {
             serviceUUID: backendServiceUUID,

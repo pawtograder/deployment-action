@@ -23,7 +23,9 @@ import {
   startApplicationByUuid,
   startServiceByUuid,
   updateEnvsByServiceUuid,
-  updateServiceByUuid
+  updateServiceByUuid,
+  updateApplicationByUuid,
+  deployByTagOrUuid
 } from './client/sdk.gen.js'
 import { TCPTunnelClient } from './tcp-tunnel.js'
 
@@ -220,10 +222,13 @@ export default class Coolify {
       (service) => service.name === supabaseComponentName
     )
     let backendServiceUUID: string
+    let isNewSupabaseService: boolean = false
     let createdNewSupabaseService: boolean = false
     if (existingSupabaseService && existingSupabaseService.uuid) {
       backendServiceUUID = existingSupabaseService.uuid
+      isNewSupabaseService = false
     } else {
+      isNewSupabaseService = true
       console.log(`Creating new supabase service ${supabaseComponentName}`)
       createdNewSupabaseService = true
       const updatedDockerCompose = await readFile(
@@ -369,7 +374,8 @@ export default class Coolify {
       supabase_url,
       supabase_anon_key,
       supabase_service_role_key,
-      deploymentKey
+      deploymentKey,
+      isNewSupabaseService
     }
   }
   async cleanup({
@@ -435,7 +441,8 @@ export default class Coolify {
       supabase_url,
       supabase_anon_key,
       supabase_service_role_key,
-      deploymentKey
+      deploymentKey,
+      isNewSupabaseService
     } = await this.getSupabaseServiceUUIDOrCreateNewOne({
       supabaseComponentName,
       ephemeral
@@ -469,7 +476,7 @@ export default class Coolify {
       serviceUUID: backendServiceUUID,
       deployToken: deploymentKey,
       checkedOutProjectDir,
-      resetDb: true,
+      resetDb: isNewSupabaseService,
       postgresPassword: postgres_password
     })
 
@@ -477,7 +484,7 @@ export default class Coolify {
       (app) => app.name === frontendAppName
     )
     let appUUID = existingFrontendApp?.uuid
-    if (!existingFrontendApp) {
+    if (!existingFrontendApp || !appUUID) {
       //Create frontend service, deploy it
       const frontendApp = await createPrivateGithubAppApplication({
         client: this.client,
@@ -553,6 +560,29 @@ export default class Coolify {
         appUUID: appUUID
       })
       console.log('Frontend started')
+    } else {
+      //Update the commit SHA of the frontend app
+      await updateApplicationByUuid({
+        client: this.client,
+        path: {
+          uuid: appUUID
+        },
+        body: {
+          git_commit_sha: gitCommitSha
+        }
+      })
+      console.log(
+        `Deploying frontend app ${appUUID} with commit ${gitCommitSha}`
+      )
+      await deployByTagOrUuid({
+        client: this.client,
+        query: {
+          uuid: appUUID
+        }
+      })
+      await this.waitUntilServiceOrAppisReady({
+        appUUID: appUUID
+      })
     }
 
     return {
